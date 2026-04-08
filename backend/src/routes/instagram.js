@@ -8,7 +8,10 @@ import {
   checkFollower,
   extractShortcode,
   shortcodeToMediaId,
+  normalizeClientComments,
 } from '../services/scraper.js';
+
+const MAX_CLIENT_COMMENTS = 100_000;
 
 export const instagramRouter = Router();
 
@@ -47,15 +50,13 @@ instagramRouter.post('/logout', (req, res) => {
 });
 
 // Çekiliş yap
+// - Mod A (sunucu): postUrl + .env oturumu → Instagram API’den yorum çeker
+// - Mod B (istemci): body.comments[] → sunucu Instagram’a gitmez, sadece filtre + kazanan (extension / manuel)
 instagramRouter.post('/cekilis', async (req, res, next) => {
   try {
-    const session = getSession();
-    if (!session) {
-      return res.status(401).json({ error: 'Önce giriş yapmalısınız' });
-    }
-
     const {
       postUrl,
+      comments: rawComments,
       requireMention = false,
       allowDuplicates = false,
       minMentions = 1,
@@ -63,21 +64,69 @@ instagramRouter.post('/cekilis', async (req, res, next) => {
       winnerCount = 1,
     } = req.body;
 
-    if (!postUrl) {
-      return res.status(400).json({ error: 'Gönderi linki gerekli' });
+    const clientMode =
+      Array.isArray(rawComments) && rawComments.length > 0;
+
+    if (clientMode) {
+      if (rawComments.length > MAX_CLIENT_COMMENTS) {
+        return res.status(400).json({
+          error: `En fazla ${MAX_CLIENT_COMMENTS.toLocaleString('tr-TR')} yorum gönderilebilir`,
+        });
+      }
+      if (requireFollower) {
+        return res.status(400).json({
+          error:
+            'Tarayıcıdan gelen yorumlarla takipçi kontrolü desteklenmiyor (userId yok). requireFollower kapatın veya sunucu modunu (postUrl) kullanın.',
+        });
+      }
+
+      const allComments = normalizeClientComments(rawComments);
+      if (allComments.length === 0) {
+        return res.status(400).json({
+          error: 'Geçerli yorum yok: her öğede username ve text gerekli',
+        });
+      }
+
+      let filtered = filterComments(allComments, {
+        requireMention,
+        allowDuplicates,
+        minMentions,
+      });
+
+      const winners = pickWinners(filtered, winnerCount);
+
+      return res.json({
+        success: true,
+        stats: {
+          source: 'client',
+          totalComments: allComments.length,
+          eligibleComments: filtered.length,
+          winnerCount: winners.length,
+        },
+        winners,
+        eligible: filtered,
+      });
     }
 
-    // Yorumları çek
+    const session = getSession();
+    if (!session) {
+      return res.status(401).json({ error: 'Önce giriş yapmalısınız' });
+    }
+
+    if (!postUrl) {
+      return res.status(400).json({
+        error: 'Gönderi linki gerekli (veya comments dizisi gönderin)',
+      });
+    }
+
     const allComments = await fetchAllComments(postUrl);
 
-    // Filtreleme
     let filtered = filterComments(allComments, {
       requireMention,
       allowDuplicates,
       minMentions,
     });
 
-    // Takipçi kontrolü (yavaş olabilir)
     if (requireFollower) {
       const followerChecks = await Promise.all(
         filtered.map(async c => {
@@ -88,12 +137,12 @@ instagramRouter.post('/cekilis', async (req, res, next) => {
       filtered = followerChecks.filter(c => c.isFollower);
     }
 
-    // Kazananları seç
     const winners = pickWinners(filtered, winnerCount);
 
     res.json({
       success: true,
       stats: {
+        source: 'server',
         totalComments: allComments.length,
         eligibleComments: filtered.length,
         winnerCount: winners.length,

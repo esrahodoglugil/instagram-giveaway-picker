@@ -341,6 +341,30 @@ export async function fetchAllComments(postUrl, onProgress) {
   return allComments;
 }
 
+/** Tarayıcı / extension’dan gelen ham yorumları backend’in beklediği şekle çevirir. */
+export function normalizeClientComments(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (!c || typeof c !== 'object') continue;
+    const username = String(c.username || '').trim();
+    const text = String(c.text ?? '').trim();
+    if (!username || !text) continue;
+    out.push({
+      id: c.id != null ? String(c.id) : `client-${i}-${username.slice(0, 20)}`,
+      username,
+      fullName: String(c.fullName || '').trim(),
+      profilePicUrl: String(c.profilePicUrl || '').trim(),
+      text,
+      timestamp: c.timestamp ?? null,
+      likeCount: Number(c.likeCount) || 0,
+      userId: c.userId != null ? String(c.userId) : '',
+    });
+  }
+  return out;
+}
+
 // Kullanıcının seni takip edip etmediğini kontrol et
 export async function checkFollower(userId) {
   const base = getAuthHeaders();

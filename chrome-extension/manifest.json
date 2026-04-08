@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Instagram Çekiliş — yorum gönder",
+  "version": "1.0.0",
+  "description": "Instagram gönderi sayfasında yorumları toplayıp yerel çekiliş API'sine gönderir.",
+  "permissions": ["scripting", "activeTab"],
+  "host_permissions": [
+    "https://www.instagram.com/*",
+    "http://localhost:3001/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.instagram.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
