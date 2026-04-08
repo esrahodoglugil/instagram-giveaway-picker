@@ -8,3 +8,4 @@ export const logout = () => api.post('/logout').then(r => r.data);
 
 export const runCekilis = (params) => api.post('/cekilis', params).then(r => r.data);
 export const previewPost = (postUrl) => api.post('/preview', { postUrl }).then(r => r.data);
+export const fetchPostOwner = (postUrl) => api.post('/post-owner', { postUrl }).then(r => r.data);

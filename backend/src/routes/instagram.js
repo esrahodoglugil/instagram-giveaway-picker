@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getSession, clearSession, reloadSessionFromEnv } from '../services/session.js';
 import {
   fetchAllComments,
+  fetchPostOwnerProfile,
   filterComments,
   pickWinners,
   checkFollower,
@@ -120,6 +121,24 @@ instagramRouter.post('/preview', async (req, res, next) => {
     const mediaId = shortcodeToMediaId(shortcode);
 
     res.json({ success: true, shortcode, mediaId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Gönderi sahibini ve profil istatistiklerini önizle
+instagramRouter.post('/post-owner', async (req, res, next) => {
+  try {
+    const session = getSession();
+    if (!session) {
+      return res.status(401).json({ error: 'Önce giriş yapmalısınız' });
+    }
+
+    const { postUrl } = req.body;
+    if (!postUrl) return res.status(400).json({ error: 'Gönderi linki gerekli' });
+
+    const profile = await fetchPostOwnerProfile(postUrl);
+    res.json({ success: true, ...profile });
   } catch (err) {
     next(err);
   }

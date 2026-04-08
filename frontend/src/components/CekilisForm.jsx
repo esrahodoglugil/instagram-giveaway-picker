@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { runCekilis } from '../services/api';
+import { useEffect, useState } from 'react';
+import { runCekilis, fetchPostOwner } from '../services/api';
 
 export default function CekilisForm({ username, onLogout, onResult }) {
   const [postUrl, setPostUrl] = useState('');
@@ -11,8 +11,10 @@ export default function CekilisForm({ username, onLogout, onResult }) {
     winnerCount: 1,
   });
   const [loading, setLoading] = useState(false);
+  const [ownerLoading, setOwnerLoading] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const [ownerInfo, setOwnerInfo] = useState(null);
 
   const toggle = key => setOptions(o => ({ ...o, [key]: !o[key] }));
   const setNum = (key, val) => setOptions(o => ({ ...o, [key]: Number(val) }));
@@ -32,6 +34,42 @@ export default function CekilisForm({ username, onLogout, onResult }) {
       setStatus('');
     }
   };
+
+  const handleFetchOwner = async (urlValue = postUrl) => {
+    const normalizedUrl = urlValue.trim();
+    if (!normalizedUrl) return;
+    setOwnerLoading(true);
+    try {
+      const data = await fetchPostOwner(normalizedUrl);
+      setOwnerInfo({
+        ...(data.owner || null),
+        commentCount: Number(data.commentCount || 0),
+      });
+    } catch (err) {
+      setOwnerInfo(null);
+      // Link yazarken invalid URL olabilir; sessiz geçip çekiliş hatasını bozmayalım.
+    } finally {
+      setOwnerLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const current = postUrl.trim();
+    if (!current) {
+      setOwnerInfo(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      handleFetchOwner(current);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [postUrl]);
+
+  const formatCompact = (n) =>
+    new Intl.NumberFormat('tr-TR', {
+      notation: 'compact',
+      maximumFractionDigits: 1,
+    }).format(Number(n || 0));
 
   return (
     <div style={styles.wrapper}>
@@ -53,6 +91,29 @@ export default function CekilisForm({ username, onLogout, onResult }) {
           value={postUrl}
           onChange={e => setPostUrl(e.target.value)}
         />
+        <div style={styles.metaHint}>
+          {ownerLoading ? '⏳ Profil bilgileri alınıyor...' : 'Linki yapıştırınca profil bilgileri otomatik gelir'}
+        </div>
+        {ownerInfo && (
+          <div style={styles.ownerCard}>
+            <div style={styles.ownerHead}>
+              <img src={ownerInfo.profilePicUrl} alt={ownerInfo.username} style={styles.ownerAvatar} />
+              <div>
+                <div style={styles.ownerName}>
+                  {ownerInfo.fullName || ownerInfo.username}
+                  {ownerInfo.isVerified ? ' ✓' : ''}
+                </div>
+                <div style={styles.ownerUser}>@{ownerInfo.username}</div>
+              </div>
+            </div>
+            <div style={styles.ownerStats}>
+              <span>Takipçi: <strong>{formatCompact(ownerInfo.followerCount)}</strong></span>
+              <span>Takip: <strong>{formatCompact(ownerInfo.followingCount)}</strong></span>
+              <span>Gönderi: <strong>{formatCompact(ownerInfo.mediaCount)}</strong></span>
+              <span>Yorum: <strong>{ownerInfo.commentCount?.toLocaleString('tr-TR') || 0}</strong></span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Options */}
@@ -156,6 +217,13 @@ const styles = {
   card: { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '1.5rem' },
   label: { color: 'var(--text2)', fontSize: '0.85rem', fontWeight: 500, display: 'block', marginBottom: '0.5rem' },
   input: { width: '100%', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '10px', padding: '0.85rem 1rem', color: 'var(--text)', fontSize: '0.95rem', outline: 'none' },
+  metaHint: { marginTop: '0.6rem', color: 'var(--text2)', fontSize: '0.82rem' },
+  ownerCard: { marginTop: '0.9rem', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: '10px', padding: '0.9rem' },
+  ownerHead: { display: 'flex', alignItems: 'center', gap: '0.75rem' },
+  ownerAvatar: { width: '42px', height: '42px', borderRadius: '50%', objectFit: 'cover', background: 'var(--border)' },
+  ownerName: { fontSize: '0.95rem', fontWeight: 700 },
+  ownerUser: { fontSize: '0.85rem', color: 'var(--text2)' },
+  ownerStats: { marginTop: '0.7rem', display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.86rem', color: 'var(--text2)' },
   sectionTitle: { fontSize: '1rem', fontWeight: 700, marginBottom: '0.5rem', fontFamily: 'Syne, sans-serif' },
   options: { display: 'flex', flexDirection: 'column' },
   subOption: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0 0.75rem', paddingLeft: '1rem', borderBottom: '1px solid var(--border)' },

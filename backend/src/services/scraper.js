@@ -38,6 +38,23 @@ async function instagramCommentsJson(url, refererUrl) {
   return data;
 }
 
+async function instagramWebJson(url, refererUrl) {
+  const headers = getWebApiFetchHeaders(refererUrl);
+  const res = await fetch(url, { headers });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    const hint = text.trimStart().startsWith('<!') ? htmlLoginHint() : 'Yanıt JSON değil.';
+    throw new Error(`${hint} (HTTP ${res.status}) Önizleme: ${text.slice(0, 100)}…`);
+  }
+  if (!res.ok) {
+    throw new Error(data?.message || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
 // Gönderi URL'inden shortcode çıkar
 export function extractShortcode(url) {
   const patterns = [
@@ -60,6 +77,141 @@ export function shortcodeToMediaId(shortcode) {
     id = id * BigInt(64) + BigInt(ALPHABET.indexOf(char));
   }
   return id.toString();
+}
+
+function normalizeOwner(owner, stats = {}) {
+  if (!owner) return null;
+  return {
+    userId: owner.pk != null ? String(owner.pk) : owner.id != null ? String(owner.id) : '',
+    username: owner.username || '',
+    fullName: owner.full_name || '',
+    profilePicUrl: owner.profile_pic_url || '',
+    isPrivate: owner.is_private === true,
+    isVerified: owner.is_verified === true,
+    followerCount: Number(stats.followerCount || 0),
+    followingCount: Number(stats.followingCount || 0),
+    mediaCount: Number(stats.mediaCount || 0),
+  };
+}
+
+function toCount(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function mergeStats(primary = {}, fallback = {}) {
+  return {
+    followerCount: toCount(primary.followerCount) || toCount(fallback.followerCount),
+    followingCount: toCount(primary.followingCount) || toCount(fallback.followingCount),
+    mediaCount: toCount(primary.mediaCount) || toCount(fallback.mediaCount),
+  };
+}
+
+function getSessionIdOnlyCookie() {
+  const fullCookie = getAuthHeaders()?.Cookie || '';
+  const sessionPart = fullCookie
+    .split(';')
+    .map(p => p.trim())
+    .find(p => p.startsWith('sessionid='));
+  return sessionPart || '';
+}
+
+export async function fetchPostOwnerProfile(postUrl) {
+  const shortcode = extractShortcode(postUrl);
+  const mediaId = shortcodeToMediaId(shortcode);
+  const postReferer = refererForPost(postUrl, shortcode);
+
+  await fetch(postReferer, { headers: getDocumentFetchHeaders() }).catch(() => {});
+
+  const commentsData = await instagramCommentsJson(
+    `https://www.instagram.com/api/v1/media/${mediaId}/comments/?can_support_threading=true`,
+    postReferer
+  );
+
+  const ownerFromCaption = commentsData?.caption?.user || null;
+  const ownerFromFirstComment = commentsData?.comments?.[0]?.user || null;
+  const owner = ownerFromCaption || ownerFromFirstComment;
+  if (!owner?.username) {
+    throw new Error('Gönderi sahibi bilgisi alınamadı.');
+  }
+
+  let stats = { followerCount: 0, followingCount: 0, mediaCount: 0 };
+
+  // Ana kaynak: web_profile_info (curl testinde doğru değerleri döndürüyor)
+  if (owner?.username) {
+    try {
+      const profileData = await instagramWebJson(
+        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(owner.username)}`,
+        `https://www.instagram.com/${owner.username}/`
+      );
+      const user = profileData?.data?.user;
+      const fallbackStats = {
+        followerCount:
+          user?.edge_followed_by?.count ??
+          user?.follower_count ??
+          user?.followerCount ??
+          0,
+        followingCount:
+          user?.edge_follow?.count ??
+          user?.following_count ??
+          user?.followingCount ??
+          0,
+        mediaCount:
+          user?.edge_owner_to_timeline_media?.count ??
+          user?.media_count ??
+          user?.mediaCount ??
+          0,
+      };
+      stats = mergeStats(stats, fallbackStats);
+      console.log(`  [OK] ${owner.username}: ${stats.followerCount} takipci`);
+    } catch {
+      // no-op
+    }
+  }
+
+  // Fallback: bazı hesaplarda web_profile_info eksik dönerse /users/{id}/info dene
+  if ((!stats.followerCount || !stats.followingCount || !stats.mediaCount) && owner?.pk) {
+    try {
+      const userInfoHeaders = {
+        Cookie: getSessionIdOnlyCookie(),
+        'X-IG-App-ID': '936619743392459',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      };
+      const userInfoRes = await axios.get(
+        `https://www.instagram.com/api/v1/users/${encodeURIComponent(String(owner.pk))}/info/`,
+        { headers: userInfoHeaders }
+      );
+      const u = userInfoRes?.data?.user || userInfoRes?.data;
+      const fallbackStats = {
+        followerCount:
+          u?.follower_count ??
+          u?.edge_followed_by?.count ??
+          u?.followers ??
+          0,
+        followingCount:
+          u?.following_count ??
+          u?.edge_follow?.count ??
+          u?.following ??
+          0,
+        mediaCount:
+          u?.media_count ??
+          u?.edge_owner_to_timeline_media?.count ??
+          u?.posts_count ??
+          0,
+      };
+      stats = mergeStats(stats, fallbackStats);
+    } catch {
+      // no-op
+    }
+  }
+
+  return {
+    shortcode,
+    mediaId,
+    owner: normalizeOwner(owner, stats),
+    commentCount: Number(commentsData?.comment_count || 0),
+  };
 }
 
 /** Sonraki sayfa için query param adı + değer (next_min_id bazen JSON cursor string: cached_comments_cursor + bifilter_token). */
